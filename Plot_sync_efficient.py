@@ -5,8 +5,14 @@ from datetime import datetime, timezone, time
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
+import yaml
 
 
+file_path = "config.yaml"
+
+with open(file_path, 'r') as file:
+        # Load the YAML data into a Python dictionary
+        config = yaml.safe_load(file)
 
 def parse_xml_name(xml_name):
     """
@@ -71,7 +77,7 @@ def load_collisions(csv_path):
     print(f"Loaded {len(collisions)} collision events from CSV.")
     return np.array(collisions), np.array(collisions_identifier)
 
-def load_saes(xml_path, pla_threshold=14.0): # <-- NEW: Added pla_threshold parameter
+def load_saes(xml_path, pla_threshold=14.0): 
     """
     Loads SAE data from the XML file.
     
@@ -165,13 +171,11 @@ def synchronise(collisions, saes, collisions_identifier, sae_identifier, session
         print("Error: No session start time provided. Cannot determine search range.")
         return None, 0, None, None
            
-    # --- Magic numbers from MATLAB script ---
-    alignment_window_sec = 5.0  # 5 seconds
+    
+    alignment_window_sec = config['Alignment_threshold']  # 5 seconds
     intervals_sec = 1           # 1 second step
     
-    # --- RECOMMENDATION 1: REDUCE THIS RADIUS ---
-    # 24 hours is likely massive overkill and the main cause of slowness.
-    # Try 2 or 3 hours first.
+    
     search_radius_hours = 24 
     search_radius_sec = search_radius_hours * 3600
     
@@ -241,7 +245,7 @@ def synchronise(collisions, saes, collisions_identifier, sae_identifier, session
     
     return predicted_syncpoint, max_alignment_prctage, potential_sync_points, alignment_prctage
 
-# --- NEW FUNCTION 1 ---
+
 def get_plot_data(collisions_np, saes_np, collisions_id_np, saes_id_np, sync_point_seconds, alignment_window_sec=5.0): # Defaulted to 5.0
     """
     Calculates the final event lists for plotting after the best
@@ -289,7 +293,7 @@ def get_plot_data(collisions_np, saes_np, collisions_id_np, saes_id_np, sync_poi
             
     return plot_data, sae_aligned_count, sae_total_count, all_players
 
-# --- NEW FUNCTION 2 (MODIFIED) ---
+
 def plot_alignment(plot_data, players, sync_point_utc_dt, max_alignment, 
                    sae_aligned_count, sae_total_count, 
                    alignment_scores, potential_sync_points):
@@ -416,19 +420,18 @@ def plot_alignment(plot_data, players, sync_point_utc_dt, max_alignment,
 
 
 if __name__ == "__main__":
-    # Define file paths
-    # <<< UPDATE THESE PATHS IF YOUR FILES ARE IN A DIFFERENT LOCATION >>>
-    CSV_FILE = "2023_gbhs1stxv_vs_delasalle_compser CSV.csv"
-    XML_FILE = "gbhs-firstXV-de_la_salle-2023-filtered_15.0.xml"
+ 
+    CSV_FILE = config['CSV_path']
+    XML_FILE = config['XML_path']
     
     print("--- Loading Data ---")
     collisions_np, collisions_id_np = load_collisions(CSV_FILE)
-    saes_np, saes_id_np, session_start = load_saes(XML_FILE)
+    saes_np, saes_id_np, session_start = load_saes(XML_FILE, pla_threshold= config['PLA_threshold'])
 
     if collisions_np is not None and saes_np is not None and session_start is not None:
         print("\n--- Starting Synchronization ---")
         
-        # --- MODIFIED: Run the main analysis and get plot data ---
+   
         sync_point_seconds, max_alignment, potential_sync_points, alignment_prctage = synchronise(
             collisions_np, 
             saes_np, 
@@ -452,7 +455,7 @@ if __name__ == "__main__":
             
             print("\n--- Generating Plot Data ---")
             
-            # --- NEW: Get the final data for plotting ---
+
             plot_data, sae_aligned_count, sae_total_count, player_list = get_plot_data(
                 collisions_np, 
                 saes_np, 
@@ -465,7 +468,7 @@ if __name__ == "__main__":
             print(f"Total SAEs for plotting: {sae_total_count}")
             print(f"Aligned SAEs for plotting: {sae_aligned_count}")
             
-            # --- NEW: Call the plotting function ---
+     
             print("--- Displaying Plot ---")
             plot_alignment(
                 plot_data,

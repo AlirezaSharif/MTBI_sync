@@ -1,0 +1,4 @@
+CSV_path: "2023_gbhs1stxv_vs_delasalle_compser CSV.csv"
+XML_path: "gbhs-firstXV-de_la_salle-2023-filtered_15.0.xml"
+Alignment_threshold: 5.0
+PLA_threshold: 14

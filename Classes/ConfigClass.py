@@ -29,3 +29,6 @@ class Config:
     
     @property
     def ref_csv_path(self): return self.data.get('Reference_Impacts_CSV_path')
+
+    @property
+    def schedule_path(self): return self.data.get('schedule_path')

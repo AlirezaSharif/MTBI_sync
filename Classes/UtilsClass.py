@@ -8,7 +8,9 @@ class DataUtils:
         "Te": "Te Reimana",
         "Hybrid 3": "Jimmy",
         "Wheturangi": "Whetu",
-        "Sam": "Sam G"
+        "Sam": "Sam G",
+        "Joshua": "Josh",
+        "Samuel": "Sam G"    
     }
 
     @staticmethod

@@ -1,5 +1,6 @@
 import csv
 import os
+import pandas as pd
 import numpy as np
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -250,5 +251,108 @@ class SensorDataManager:
         self.timestamps = np.array(saes_list)
         self.identifiers = np.array(ids_list)
         print(f"Loaded {len(saes_list)} valid SAE events from XML after repair.")
+
+
+class MatchMetadataManager:
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+        self.schedule_data = {}
+        self._load()
+
+    def _load(self):
+        if not os.path.exists(self.filepath):
+            print(f"Warning: Schedule file not found: {self.filepath}")
+            return
+     
+        try:
+            # Check extension to decide loader
+            if self.filepath.endswith('.xlsx') or self.filepath.endswith('.xls'):
+                df = pd.read_excel(self.filepath)
+         
+            else:
+                # Fallback to CSV
+                df = pd.read_csv(self.filepath)
+
+            # Normalize headers: strip whitespace and make lowercase
+            df.columns = [c.strip().lower() for c in df.columns]
+
+            # Iterate through rows
+            for _, row in df.iterrows():
+                # Get date safely
+                date_val = row.get('date')
+                if pd.isna(date_val): continue
+                
+                # Handle Excel's datetime objects vs strings
+                if isinstance(date_val, datetime):
+                    dt = date_val
+                else:
+                    try:
+                        dt = datetime.strptime(str(date_val).strip(), '%d/%m/%Y')
+                    except ValueError:
+                        continue
+
+                key = dt.strftime('%Y-%m-%d')
+                
+                # Store data (converting NaNs to None)
+                self.schedule_data[key] = {
+                    'mg_out': row.get('mg_out') if pd.notna(row.get('mg_out')) else None,
+                    'kickoff': row.get('kickoff') if pd.notna(row.get('kickoff')) else None,
+                    'end_first': row.get('end_first') if pd.notna(row.get('end_first')) else None,
+                    'start_second': row.get('start_second') if pd.notna(row.get('start_second')) else None,
+                    'end_second': row.get('end_second') if pd.notna(row.get('end_second')) else None
+                }
+                
+            print(f"Loaded match schedule for {len(self.schedule_data)} dates.")
+            
+        except Exception as e:
+            print(f"Error reading Schedule file: {e}")
+
+    def get_markers(self, target_date: datetime) -> Dict[str, float]:
+        """
+        Returns a dictionary of {event_name: timestamp_float} for the target date.
+        """
+        key = target_date.strftime('%Y-%m-%d')
+        raw_times = self.schedule_data.get(key)
+        
+        if not raw_times:
+            return {}
+
+        markers = {}
+        base_date_str = target_date.strftime('%Y-%m-%d')
+
+        def parse_time(t_val):
+            if not t_val: return None
+            
+            # If Excel gave us a datetime.time object directly
+            if isinstance(t_val, (datetime, pd.Timestamp)):
+                 # Combine with target date
+                 full_dt = datetime.combine(target_date.date(), t_val.time())
+                 if target_date.tzinfo:
+                     full_dt = full_dt.replace(tzinfo=target_date.tzinfo)
+                 return full_dt.timestamp()
+
+            # Handle strings (e.g. "11:47am")
+            t_str = str(t_val).strip().lower().replace('.', ':')
+            
+            formats = ['%Y-%m-%d %I:%M%p', '%Y-%m-%d %I:%M:%S%p', '%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M%p']
+            
+            full_str = f"{base_date_str} {t_str}"
+         
+            for fmt in formats:
+                try:
+                    dt = datetime.strptime(full_str, fmt)
+                    if target_date.tzinfo:
+                        dt = dt.replace(tzinfo=target_date.tzinfo)
+                    return dt.timestamp()
+                except ValueError:
+                    continue
+            return None
+
+        for event, val in raw_times.items():
+            ts = parse_time(val)
+            if ts:
+                markers[event] = ts
+        
+        return markers
 
 

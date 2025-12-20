@@ -4,7 +4,7 @@ from Classes.DataLoadersClass import (
     ReferenceDataManager, 
     CollisionDataManager, 
     SensorDataManager,
-    MatchMetadataManager  # <--- Added Import
+    MatchMetadataManager
 )
 from Classes.SynchronizationClass import Synchronizer
 from Classes.VisualisationClass import Visualizer
@@ -29,13 +29,10 @@ class SyncApp:
             self.config.pla_threshold
         )
 
-        # 4. Load Match Schedule (NEW)
-        # Note: Ensure your config.yaml has a 'schedule_path' entry, 
-        # or it will default to 'schedule.csv' in the current directory.
-        #schedule_path = getattr(self.config, self.config.schedule_path, 'schedule.csv')
+        # 4. Load Match Schedule
         schedule_path = self.config.schedule_path or 'schedule.csv'
-    
         schedule_mgr = MatchMetadataManager(schedule_path)
+
         # Validation Check
         if not (coll_loader.timestamps is not None and sae_loader.timestamps is not None):
             print("Aborting: Data load failure.")
@@ -49,25 +46,28 @@ class SyncApp:
             print(f"Predicted Sync Point: {result.sync_dt_utc.isoformat()}")
             print(f"Max Alignment: {result.max_alignment * 100:.2f}%")
             
-            # --- NEW: Get Markers for this Date ---
+            # --- Get Markers & Player Statuses for this Date ---
             markers = {}
+            player_statuses = {}
+            
             if len(sae_loader.timestamps) > 0:
-                # Use session start if available, otherwise use the first event timestamp
-                # to determine which date we are looking at.
+                # Determine date from session start
                 ref_ts = sae_loader.session_start_utc if sae_loader.session_start_utc else sae_loader.timestamps[0]
                 target_date = datetime.fromtimestamp(ref_ts)
                 
-                print(f"Fetching schedule markers for date: {target_date.strftime('%Y-%m-%d')}")
+                print(f"Fetching schedule data for date: {target_date.strftime('%Y-%m-%d')}")
                 markers = schedule_mgr.get_markers(target_date)
+                player_statuses = schedule_mgr.get_player_statuses(target_date)
+                
                 if markers:
                     print(f"Found markers: {list(markers.keys())}")
-                else:
-                    print("No markers found in schedule for this date.")
+                if player_statuses:
+                    print(f"Found statuses for {len(player_statuses)} players")
        
             print("\n--- Plotting ---")
             viz = Visualizer(self.config)
-            # Pass the markers dictionary to the plot function
-            viz.plot(coll_loader, sae_loader, result, markers=markers)
+            # Pass both markers and player_statuses to the plot function
+            viz.plot(coll_loader, sae_loader, result, markers=markers, player_statuses=player_statuses)
         else:
             print("Synchronization failed.")
 

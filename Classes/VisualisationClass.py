@@ -9,30 +9,71 @@ from Classes.SynchronizationClass import SyncResult
 class Visualizer:
     def __init__(self, config: Config):
         self.config = config
-        # Definitions for the vertical lines and regions
         self.marker_styles = {
             'mg_out':       {'color': 'purple', 'style': '--', 'label': 'MG Out'},
-            'kickoff':      {'color': 'green',  'style': '--',  'label': 'Kickoff'},
+            'kickoff':      {'color': 'green',  'style': '--', 'label': 'Kickoff'},
             'end_first':    {'color': 'red',    'style': '--', 'label': 'End 1st'},
             'start_second': {'color': 'green',  'style': '--', 'label': 'Start 2nd'},
-            'end_second':   {'color': 'red',  'style': '--',  'label': 'Game End'}
+            'end_second':   {'color': 'red',    'style': '--', 'label': 'Game End'}
         }
 
-    def prepare_plot_data(self, coll_data: CollisionDataManager, sae_data: SensorDataManager, result: SyncResult):
-        """Organizes data for the timeline plot."""
+    def _refine_halftime(self, coll_data: CollisionDataManager, markers: dict):
+        """
+        Refines the halftime markers by finding the largest gap in CODED events 
+        strictly within the scheduled end_first and start_second interval.
+        """
+        if not markers or 'end_first' not in markers or 'start_second' not in markers:
+            return markers
+
+        scheduled_start = markers['end_first']
+        scheduled_end = markers['start_second']
+
+        if scheduled_start >= scheduled_end:
+            return markers
+
+        all_ts = np.sort(coll_data.timestamps)
         
-        all_players = sorted(list(set(coll_data.identifiers) | set(sae_data.identifiers)))
+        # Filter events strictly within the scheduled interval
+        events_in_break = all_ts[(all_ts > scheduled_start) & (all_ts < scheduled_end)]
+
+        # Create critical points: [Scheduled Start, ...Events..., Scheduled End]
+        critical_points = np.concatenate(([scheduled_start], events_in_break, [scheduled_end]))
+
+        diffs = np.diff(critical_points)
+        max_gap_idx = np.argmax(diffs)
+        max_gap_duration = diffs[max_gap_idx]
+
+        # The gap starts at critical_points[i] and ends at critical_points[i+1]
+        true_end_first = critical_points[max_gap_idx]
+        true_start_second = critical_points[max_gap_idx + 1]
+
+        if max_gap_duration > 120: 
+            markers['end_first'] = true_end_first + 1
+            markers['start_second'] = true_start_second - 1
+            print(f"Refined Halftime: Found {max_gap_duration/60:.2f} min gap inside scheduled interval.")
+        else:
+            print(f"No significant gap found within scheduled halftime. Keeping original.")
+
+        return markers
+
+    def prepare_plot_data(self, coll_data: CollisionDataManager, sae_data: SensorDataManager, result: SyncResult, player_statuses: dict = None):
+        """Organizes data for the timeline plot (Relative to Sync Point)."""
+        
+        coll_players = set(coll_data.identifiers)
+        sae_players = set(sae_data.identifiers)
+        schedule_players = set(player_statuses.keys()) if player_statuses else set()
+        
+        all_players = sorted(list(coll_players | sae_players | schedule_players))
+        
         plot_data = {p: {'coded': [], 'aligned': [], 'unaligned': []} for p in all_players}
         unique_matches = {p: set() for p in all_players}
         
-        # 1. Populate Coded (Collisions)
-        # Note: Collisions are already relative to video time (usually), or need shifting?
-        # Assuming coll_data.timestamps are already in "video time" or similar.
+        # Populate Coded (relative to video start/sync point)
         for i, name in enumerate(coll_data.identifiers):
-            plot_data[name]['coded'].append(coll_data.timestamps[i])
+            if name in plot_data: 
+                plot_data[name]['coded'].append(coll_data.timestamps[i])
 
-        # 2. Populate SAEs
-        # Shift absolute timestamps to relative time based on sync point
+        # Populate SAEs (relative to video start/sync point)
         shifted_sae = sae_data.timestamps - result.sync_point
         sae_aligned_count = 0
         
@@ -40,16 +81,12 @@ class Visualizer:
             name = sae_data.identifiers[i]
             if name not in plot_data: continue
             
-            # Filter collisions for this player
             p_coll_mask = (coll_data.identifiers == name)
             p_coll_ts = coll_data.timestamps[p_coll_mask]
             
-            # Check alignment against original collisions
             if len(p_coll_ts) > 0 and np.min(np.abs(p_coll_ts - sae_t)) < self.config.alignment_threshold:
                 plot_data[name]['aligned'].append(sae_t)
                 sae_aligned_count += 1
-                
-                # Mark which coded event was hit
                 matched_indices = np.where(p_coll_mask & (np.abs(coll_data.timestamps - sae_t) < self.config.alignment_threshold))[0]
                 unique_matches[name].update(matched_indices)
             else:
@@ -63,33 +100,31 @@ class Visualizer:
             'matches': unique_matches
         }
 
-    def plot(self, coll_data, sae_data, result: SyncResult, markers: dict = None):
-        """
-        Main plotting function.
-        :param markers: Optional dictionary of {event_name: timestamp_float}
-        """
-        viz_data = self.prepare_plot_data(coll_data, sae_data, result)
+    def plot(self, coll_data, sae_data, result: SyncResult, markers: dict = None, player_statuses: dict = None):
+        """Main plotting function."""
         
-        fig = plt.figure(figsize=(20, 12))
-        gs = fig.add_gridspec(2, 1, height_ratios=[1, 4], hspace=0.1)
+        # Refine halftime
+        if markers:
+            markers = self._refine_halftime(coll_data, markers)
+
+        viz_data = self.prepare_plot_data(coll_data, sae_data, result, player_statuses)
+        
+        fig = plt.figure(figsize=(20, max(10, len(viz_data['players']) * 0.4))) 
+        gs = fig.add_gridspec(2, 1, height_ratios=[1, 6], hspace=0.1)
         ax_top = fig.add_subplot(gs[0])
         ax_bottom = fig.add_subplot(gs[1])
 
         self._plot_alignment_score(ax_top, result, viz_data)
-        # Pass markers to the timeline plotter
-        self._plot_timeline(ax_bottom, viz_data, result.sync_point, markers)
+        self._plot_timeline(ax_bottom, viz_data, result.sync_point, markers, player_statuses)
 
         plt.tight_layout()
         plt.show()
 
     def _plot_alignment_score(self, ax, result: SyncResult, viz_data):
-        # Convert timestamps to datetimes for x-axis
         x_dates = [datetime.fromtimestamp(ts, tz=timezone.utc) for ts in result.all_points]
-        
         ax.plot(x_dates, result.all_scores * 100, color='black', linewidth=0.5)
         ax.axvline(result.sync_dt_utc, color='#2ca02c', linestyle='-', linewidth=2, alpha=0.7)
 
-        # Info Box
         textstr = (f"Predicted synchronisation point\n"
                    f"{result.sync_dt_utc.strftime('%Z %H:%M:%S %p')}\n"
                    f"{result.max_alignment * 100:.2f}% Alignment")
@@ -102,7 +137,6 @@ class Visualizer:
         ax.set_xticklabels([])
         ax.tick_params(axis='x', length=0)
 
-        # Legend
         handles = [
             plt.Line2D([0], [0], marker='v', color='blue', markersize=8, linestyle='None', label='Coded Match Event'),
             plt.Line2D([0], [0], marker='^', color='red', markersize=8, linestyle='None', label='SAE'),
@@ -110,7 +144,6 @@ class Visualizer:
         ]
         ax.legend(handles=handles, loc='upper left', ncol=3, frameon=False, fontsize=10)
 
-        # Title
         ac = viz_data['aligned_count']
         tc = viz_data['total_sae']
         pct = (ac/tc*100) if tc > 0 else 0
@@ -119,48 +152,66 @@ class Visualizer:
                    f"impact threshold: {self.config.pla_threshold}g")
         ax.set_title(summary, loc='right', fontsize=12, fontweight='bold')
 
-    def _plot_timeline(self, ax, viz_data, sync_point, markers):
+    def _plot_timeline(self, ax, viz_data, sync_point, markers, player_statuses):
         players = viz_data['players']
         p_data = viz_data['data']
         
+        # --- DETERMINE TIME ORIGIN (0 = Kickoff) ---
+        t_zero = sync_point # Default to sync point (video start) if no kickoff
+        is_game_time = False
+        
+        if markers and 'kickoff' in markers:
+            t_zero = markers['kickoff']
+            is_game_time = True
+            
+        # Shift calculation:
+        # Currently p_data is relative to sync_point.
+        # We want it relative to t_zero.
+        # New_Time = (Old_Time_Relative_to_Sync + Sync_Point) - t_zero
+        #          = Old_Time + (Sync_Point - t_zero)
+        display_shift = sync_point - t_zero
+
         offsets = {'coded': -0.2, 'aligned': 0.0, 'unaligned': 0.2}
 
-        # 1. Plot Player Data
+        # 1. Plot Player Data (Shifted)
         for i, player in enumerate(players):
             y = i
             d = p_data[player]
             
-            ax.plot(d['coded'], [y + offsets['coded']] * len(d['coded']),
+            # Apply shift to all data points
+            coded_pts = [t + display_shift for t in d['coded']]
+            aligned_pts = [t + display_shift for t in d['aligned']]
+            unaligned_pts = [t + display_shift for t in d['unaligned']]
+            
+            ax.plot(coded_pts, [y + offsets['coded']] * len(coded_pts),
                     marker='v', color='blue', markersize=6, linestyle='None', alpha=0.8)
             
-            ax.plot(d['aligned'], [y + offsets['aligned']] * len(d['aligned']),
+            ax.plot(aligned_pts, [y + offsets['aligned']] * len(aligned_pts),
                     marker='^', color='lime', markersize=6, linestyle='None', alpha=0.9)
             
-            ax.plot(d['unaligned'], [y + offsets['unaligned']] * len(d['unaligned']),
+            ax.plot(unaligned_pts, [y + offsets['unaligned']] * len(unaligned_pts),
                     marker='^', color='red', markersize=6, linestyle='None', alpha=0.6)
-            # Ghost marker
-            ax.plot(d['aligned'], [y + offsets['unaligned']] * len(d['aligned']),
+            ax.plot(aligned_pts, [y + offsets['unaligned']] * len(aligned_pts),
                      marker='^', color='red', markersize=6, linestyle='None', alpha=0.6)
 
             if i < len(players) - 1:
                 ax.axhline(y=i + 0.5, color='gray', linestyle='-', linewidth=0.5, alpha=0.2)
 
-        
-        # 2. Plot Match Markers & Regions
+        # 2. Plot Match Markers (Shifted)
         if markers:
-            # Helper: Shift absolute marker time to relative plot time
-            def get_rel_x(ts): return ts - sync_point
+            # Marker Time Relative to Origin
+            def get_disp_x(ts): return ts - t_zero
 
-            # A. Draw Vertical Lines (Visual separators only, no text)
             for name, ts in markers.items():
                 if name in self.marker_styles and ts:
                     style = self.marker_styles[name]
-                    rel_x = get_rel_x(ts)
+                    if name == 'mg_out':
+                        rel_x = -60 * 30  # 30 mins before kickoff
+                    else:
+                        rel_x = get_disp_x(ts)
                     ax.axvline(x=rel_x, color=style['color'], linestyle=style['style'], 
                                linewidth=2, alpha=0.8)
 
-            # B. Plot Regions (Shading + Centered Labels)
-            # Define regions: (start_marker, end_marker, Label, Color)
             regions = [
                 ('mg_out',       'kickoff',      'Pre-Game',  'purple'),
                 ('kickoff',      'end_first',    '1st Half',  'green'),
@@ -170,57 +221,78 @@ class Visualizer:
 
             for start_key, end_key, label_text, color in regions:
                 if markers.get(start_key) and markers.get(end_key):
-                    x_start = get_rel_x(markers[start_key])
-                    x_end = get_rel_x(markers[end_key])
-                    
-                    # 1. Shade the region
-                    # Note: We keep label=label_text so it appears in the Legend once
-                    # Matplotlib handles duplicate labels automatically if we plot carefully, 
-                    # but usually, it's safer to only label specific handles if duplicates appear.
-                    # For now, adding label here is fine.
-                    ax.axvspan(x_start, x_end, color=color, alpha=0.1, label=label_text)
-                    
-                    # 2. Add Text Label centered at the top
-                    mid_point = (x_start + x_end) / 2
-                    # y = -0.6 places it just above the top player (since y=0 is the first row)
-                    ax.text(mid_point, -0.6, label_text, 
-                            ha='center', va='bottom', 
-                            fontsize=10, fontweight='bold', color='black',
-                            bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+                    if start_key == 'mg_out':
+                        x_start = -60 * 30  # 30 mins before kickoff
+                    else:
+                        x_start = get_disp_x(markers[start_key])
+                    x_end = get_disp_x(markers[end_key])
+                    if x_start < x_end:
+                        ax.axvspan(x_start, x_end, color=color, alpha=0.1, label=label_text)
+                        mid_point = (x_start + x_end) / 2
+                        ax.text(mid_point, -0.6, label_text, 
+                                ha='center', va='bottom', 
+                                fontsize=10, fontweight='bold', color='black',
+                                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
 
         # Axes Formatting
         ax.set_yticks(np.arange(len(players)))
-        ax.set_yticklabels(players)
-        ax.set_ylim(len(players) - 0.5, -0.5) # Invert
-        ax.set_xlabel("Playback Timestamp (hh:mm:ss)", fontsize=12)
+        
+        y_labels = []
+        for p in players:
+            label = p
+            status = None
+            if player_statuses:
+                if p in player_statuses: status = player_statuses[p]
+                else:
+                    for k, v in player_statuses.items():
+                        if k in p or p in k:
+                            status = v
+                            break
+            if status and status.lower() not in ['p', 'playing', 'present', '']:
+                label += f" ({status.title()})"
+            y_labels.append(label)
+        
+        ax.set_yticklabels(y_labels)
+        ax.set_ylim(len(players) - 0.5, -0.5) 
+        
+        xlabel = "Time Relative to Kickoff (hh:mm:ss)" if is_game_time else "Playback Timestamp (hh:mm:ss)"
+        ax.set_xlabel(xlabel, fontsize=12)
 
         def time_fmt(x, pos):
-            s = int(x) # x is already in seconds relative to sync
+            s = int(x) 
             sign = '-' if s < 0 else ''
             s = abs(s)
             return f"{sign}{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}"
         
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(time_fmt))
         
-        # Calculate X limits automatically
+        # --- Set Limits ---
+        # Collect all points to determine right limit
         all_times = []
         for p in p_data.values():
-            all_times.extend(p['coded'])
-            all_times.extend(p['aligned'])
-            all_times.extend(p['unaligned'])
+            # Add shift to these for limit calculation
+            all_times.extend([t + display_shift for t in p['coded']])
+            all_times.extend([t + display_shift for t in p['aligned']])
+            all_times.extend([t + display_shift for t in p['unaligned']])
         
-        # Ensure markers are included in the view limits
         if markers:
             for ts in markers.values():
-                if ts: all_times.append(ts - sync_point)
+                if ts: all_times.append(ts - t_zero)
 
         if all_times:
-            x_min, x_max = min(all_times), max(all_times)
-            # Add some padding (5%)
-            margin = (x_max - x_min) * 0.001
-            ax.set_xlim(left=x_min - margin, right=x_max + margin)
+            # Left limit: 30 mins before game (Kickoff=0, so -1800)
+            # However, if we don't have kickoff, we fall back to standard margins
+            if is_game_time:
+                x_left = -1800 # 30 mins before kickoff
+            else:
+                x_left = min(all_times) - 60
 
-        # Secondary Axis (Stats)
+            x_right = max(all_times) + (max(all_times) - x_left) * 0.01 # Small margin
+            
+            ax.set_xlim(left=x_left, right=x_right)
+        else:
+            ax.set_xlim(-60, 60)
+
         ax_right = ax.twinx()
         ax_right.set_yticks(np.arange(len(players)))
         stats_labels = [f"{len(viz_data['matches'][p])}/{len(p_data[p]['coded'])}" for p in players]

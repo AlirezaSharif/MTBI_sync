@@ -1,5 +1,10 @@
-CSV_path: "/hpc/ash252/Eryn/new_data/manual_labels/2025/napier_preseason/napier_pre-season_vs_GBHS_firstXV CSV.csv"
-XML_path: "/hpc/ash252/Eryn/new_data/img_xml/2025/napier_preseason/gbhs-firstXV-napier_preseason-2025-filtered_5.0.xml"
-schedule_path: "/hpc/ash252/Eryn/new_data/2025_session_record_human_final.xlsx"
+CSV_path: "/home/ash252/Downloads/MTBI/new_data/manual_labels/2025/fielding/gbhs_firstXV_vs_fielding_2025 CSV.csv"
+XML_path: "/home/ash252/Downloads/MTBI/new_data/img_xml/2025/fielding/gbhs-firstXV-fielding-2025-filtered_5.0.xml"
+schedule_path: "/home/ash252/Downloads/MTBI/new_data/2025_session_record_human_final.xlsx"
 Alignment_threshold: 5.0
-PLA_threshold: 4
+PLA_threshold: 14
+# first or second
+team: first
+# aligned, all, none
+false_positive_mode: none
+output_name: test

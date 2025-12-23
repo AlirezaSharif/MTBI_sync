@@ -26,12 +26,13 @@ class SyncApp:
         sae_loader = SensorDataManager(
             self.config.xml_path, 
             ref_loader.data, 
-            self.config.pla_threshold
+            self.config.pla_threshold,
+            self.config.false_positive_mode  # Pass the new flag
         )
 
         # 4. Load Match Schedule
         schedule_path = self.config.schedule_path or 'schedule.csv'
-        schedule_mgr = MatchMetadataManager(schedule_path)
+        schedule_mgr = MatchMetadataManager(schedule_path, target_team=self.config.team)
 
         # Validation Check
         if not (coll_loader.timestamps is not None and sae_loader.timestamps is not None):
@@ -58,6 +59,7 @@ class SyncApp:
                 print(f"Fetching schedule data for date: {target_date.strftime('%Y-%m-%d')}")
                 markers = schedule_mgr.get_markers(target_date)
                 player_statuses = schedule_mgr.get_player_statuses(target_date)
+                match_meta = schedule_mgr.get_match_metadata(target_date)
                 
                 if markers:
                     print(f"Found markers: {list(markers.keys())}")
@@ -67,7 +69,7 @@ class SyncApp:
             print("\n--- Plotting ---")
             viz = Visualizer(self.config)
             # Pass both markers and player_statuses to the plot function
-            viz.plot(coll_loader, sae_loader, result, markers=markers, player_statuses=player_statuses)
+            viz.plot(coll_loader, sae_loader, result, markers=markers, player_statuses=player_statuses, match_meta=match_meta)
         else:
             print("Synchronization failed.")
 

@@ -71,12 +71,15 @@ class CollisionDataManager:
         self.identifiers = np.array(ids)
 
 class SensorDataManager:
-    def __init__(self, filepath: str, reference_data: Dict, pla_threshold: float):
+    # Update __init__ to accept fp_mode
+    def __init__(self, filepath: str, reference_data: Dict, pla_threshold: float, fp_mode: str = 'all'):
         self.filepath = filepath
         self.ref_data = reference_data
         self.pla_threshold = pla_threshold
+        self.fp_mode = fp_mode  # Store the mode
         self.timestamps = None
         self.identifiers = None
+        self.is_false_positive = None # New array to store FP status
         self.session_start_utc = None
         self._load_and_repair()
     def _load_and_repair(self):
@@ -101,22 +104,39 @@ class SensorDataManager:
             if data: groups.setdefault(data['dev_id'], []).append(data)
         return groups
     def _parse_instance(self, instance):
-        meta = {'name': None, 'dt_str': None, 'pla': None, 'dev_id': None, 'id': None}
+        meta = {'name': None, 'dt_str': None, 'pla': None, 'dev_id': None, 'id': None, 'is_fp': False}
         for label in instance.findall('label'):
             group = label.find('group')
             text_node = label.find('text')
             text = text_node.text if text_node is not None else None
             if group is None or text is None: continue
+            
             if group.text == 'Athlete Name': meta['name'] = text
             elif group.text == 'ImpactDate': meta['dt_str'] = text
             elif group.text == 'PLA': meta['pla'] = float(text)
             elif group.text == 'DeviceId': meta['dev_id'] = text.strip()
             elif group.text == 'LocalImpactId': meta['id'] = int(text)
+            # New extraction logic
+            elif group.text == 'IsFalsePositive': meta['is_fp'] = (text == 'True')
+
         parsed = DataUtils.parse_name(meta['name'])
         if not parsed or meta['pla'] is None or meta['pla'] <= self.pla_threshold: return None
+        
+        # Filter logic: If mode is 'none' and is_fp is True, discard immediately
+        if self.fp_mode == 'none' and meta['is_fp']:
+            return None
+
         dt_obj = DataUtils.parse_datetime(meta['dt_str'])
         if not dt_obj: return None
-        return {'dt': dt_obj, 'name': parsed, 'pla': meta['pla'], 'dev_id': meta['dev_id'], 'id': meta['id']}
+        
+        return {
+            'dt': dt_obj, 
+            'name': parsed, 
+            'pla': meta['pla'], 
+            'dev_id': meta['dev_id'], 
+            'id': meta['id'],
+            'is_fp': meta['is_fp'] # Pass status along
+        }
     def _repair_timestamps(self, device_groups):
         print(f"Repairing timestamps for {len(device_groups)} devices...")
         for dev_id, items in device_groups.items():
@@ -137,7 +157,8 @@ class SensorDataManager:
                         try: item['dt'] = item['dt'].replace(year=sess_dt.year, month=sess_dt.month, day=sess_dt.day, tzinfo=timezone.utc)
                         except: continue
     def _flatten_data(self, device_groups):
-        saes_list, ids_list = [], []
+        saes_list, ids_list, fp_list = [], [], []
+        dev_ids_list, impact_ids_list = [], []
         for dev_id, items in device_groups.items():
             for item in items:
                 if item['pla'] > self.pla_threshold:
@@ -145,16 +166,24 @@ class SensorDataManager:
                     if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
                     saes_list.append(dt.timestamp())
                     ids_list.append(item['name'])
+                    fp_list.append(item['is_fp'])
+                    dev_ids_list.append(item['dev_id'])
+                    impact_ids_list.append(item['id'])
+        
         self.timestamps = np.array(saes_list)
         self.identifiers = np.array(ids_list)
+        self.is_false_positive = np.array(fp_list, dtype=bool) # Store as numpy array
+        self.device_ids = np.array(dev_ids_list)
+        self.impact_ids = np.array(impact_ids_list)
         print(f"Loaded {len(saes_list)} valid SAE events.")
 
 
 # --- UPDATED: Capture ALL players even if status is empty ---
 
 class MatchMetadataManager:
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, target_team: str = None):
         self.filepath = filepath
+        self.target_team = str(target_team).strip().lower() if target_team else None
         self.schedule_data = {}
         self._load()
 
@@ -184,6 +213,11 @@ class MatchMetadataManager:
             }
 
             for _, row in df.iterrows():
+                if self.target_team:
+                    row_team = str(row.get('team', '')).strip().lower()
+                    # If the row's team doesn't match the target, skip it
+                    if row_team != self.target_team:
+                        continue
                 date_val = row.get('date')
                 if pd.isna(date_val): continue
                 
@@ -205,6 +239,11 @@ class MatchMetadataManager:
                    'end_first': row.get('end_first') if pd.notna(row.get('end_first')) else None,
                    'start_second': row.get('start_second') if pd.notna(row.get('start_second')) else None,
                    'end_second': row.get('end_second') if pd.notna(row.get('end_second')) else None
+                }
+
+                meta = {
+                    'team': row.get('team') if pd.notna(row.get('team')) else None,
+                    'opponent': row.get('opponent') if pd.notna(row.get('opponent')) else None
                 }
 
                 # --- NEW: Extract ALL Players ---
@@ -230,14 +269,20 @@ class MatchMetadataManager:
 
                 self.schedule_data[key] = {
                     'markers': markers,
-                    'players': player_statuses
+                    'players': player_statuses,
+                    'metadata': meta    
                 }
                 
             print(f"Loaded match schedule for {len(self.schedule_data)} dates.")
             
         except Exception as e:
             print(f"Error reading Schedule file: {e}")
-
+            
+    def get_match_metadata(self, target_date: datetime) -> Dict[str, str]:
+        key = target_date.strftime('%Y-%m-%d')
+        if key not in self.schedule_data: return {}
+        return self.schedule_data[key]['metadata']
+    
     def get_markers(self, target_date: datetime) -> Dict[str, float]:
         key = target_date.strftime('%Y-%m-%d')
         if key not in self.schedule_data: return {}

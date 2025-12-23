@@ -32,3 +32,13 @@ class Config:
 
     @property
     def schedule_path(self): return self.data.get('schedule_path')
+
+    @property
+    def false_positive_mode(self): 
+        # Options: 'all', 'none', 'aligned'. Default to 'all' to maintain current behavior if missing.
+        return self.data.get('false_positive_mode', 'none')
+    @property
+    def team(self): return self.data.get('team')
+
+    @property
+    def output_name(self): return self.data.get('output_name')

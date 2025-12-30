@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
+import os
+import csv
 from datetime import datetime, timezone
 from Classes.ConfigClass import Config
 from Classes.DataLoadersClass import CollisionDataManager, SensorDataManager
@@ -130,12 +132,11 @@ class Visualizer:
             'matches': unique_matches
         }
 
-    def save_outputs(self, viz_data, match_meta):
+    def save_outputs(self, viz_data, match_meta, display_shift=0.0):
             out_name = self.config.output_name
             if not out_name: return
 
             # 1. Create Directory if needed
-            import os
             folder = os.path.dirname(out_name)
             if folder and not os.path.exists(folder):
                 os.makedirs(folder)
@@ -146,14 +147,14 @@ class Visualizer:
 
             # 3. Save CSV
             csv_name = os.path.splitext(out_name)[0] + "_stats.csv"
-            import csv
+            
             
             # Determine Header Info
             team = self.config.team or match_meta.get('team', '')
             opponent = match_meta.get('opponent', '')
             
             headers = ['Player', 'Team', 'Opponent', 'DeviceId', 'LocalImpactId', 
-                    'IsFalsePositive_final', 'IsFalsePositive_orig', 'aligned_with_cme']
+                    'IsFalsePositive_final', 'IsFalsePositive_orig', 'aligned_with_cme', 'Time']
 
             with open(csv_name, 'w', newline='') as f:
                 writer = csv.writer(f)
@@ -165,19 +166,23 @@ class Visualizer:
                     # Build set of aligned IDs for lookup (to determine aligned_with_cme)
                     # Key: (DeviceId, LocalImpactId)
                     aligned_set = set((item[2], item[3]) for item in p_data['aligned'])
+
+                    all_events = p_data['aligned'] + p_data['unaligned']
                     
                     # Iterate over ALL events (stored in 'unaligned' list per previous logic)
-                    for item in p_data['unaligned']:
+                    for item in all_events:
                         # Unpack: time, is_fp, dev_id, imp_id
                         t, is_fp_orig, dev, imp = item
                         
                         is_aligned = (dev, imp) in aligned_set
+
                         
                         # Logic: If aligned, it's NOT a False Positive (Final=False)
                         # If unaligned, it keeps its original status
                         is_fp_final = False if is_aligned else is_fp_orig
                         
-                        writer.writerow([player, team, opponent, dev, imp, is_fp_final, is_fp_orig, is_aligned])
+                        final_time = t + display_shift
+                        writer.writerow([player, team, opponent, dev, imp, is_fp_final, is_fp_orig, is_aligned, final_time])
             
             print(f"Stats saved to {csv_name}")
 
@@ -191,6 +196,12 @@ class Visualizer:
 
         viz_data = self.prepare_plot_data(coll_data, sae_data, result, player_statuses)
         
+        t_zero = result.sync_point # Default to sync point
+        if markers and 'kickoff' in markers:
+            t_zero = markers['kickoff']
+            
+        display_shift = result.sync_point - t_zero
+        
         fig = plt.figure(figsize=(20, max(10, len(viz_data['players']) * 0.4))) 
         gs = fig.add_gridspec(2, 1, height_ratios=[1, 6], hspace=0.1)
         ax_top = fig.add_subplot(gs[0])
@@ -200,7 +211,7 @@ class Visualizer:
         self._plot_timeline(ax_bottom, viz_data, result.sync_point, markers, player_statuses)
 
         plt.tight_layout()
-        self.save_outputs(viz_data, match_meta or {})
+        self.save_outputs(viz_data, match_meta or {}, display_shift=display_shift)
         plt.show()
 
     def _plot_alignment_score(self, ax, result: SyncResult, viz_data):

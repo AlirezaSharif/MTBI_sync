@@ -45,9 +45,11 @@ class CollisionDataManager:
         self.filepath = filepath
         self.timestamps = None
         self.identifiers = None
+        self.qualifiers = None
         self._load()
     def _load(self):
         collisions, ids = [], []
+        qualifiers = []
         if not os.path.exists(self.filepath): return
         try:
             try:
@@ -61,14 +63,17 @@ class CollisionDataManager:
                     try:
                         pb_time = float(row.get('Qualifier: Time', row.get('Qualifier Time', 0)))
                         raw_name = (row.get('Topic Name') or '').strip()
+                        qual_val = row.get('Qualifier', '')
                         parsed = DataUtils.parse_name(raw_name)
                         if parsed:
                             collisions.append(pb_time)
                             ids.append(parsed)
+                            qualifiers.append(qual_val)
                     except: continue
         except Exception as e: print(f"Error reading Composer CSV: {e}")
         self.timestamps = np.array(collisions)
         self.identifiers = np.array(ids)
+        self.qualifiers = np.array(qualifiers, dtype=object)
 
 class SensorDataManager:
     # Update __init__ to accept fp_mode
@@ -159,6 +164,7 @@ class SensorDataManager:
     def _flatten_data(self, device_groups):
         saes_list, ids_list, fp_list = [], [], []
         dev_ids_list, impact_ids_list = [], []
+        pla_list = []
         for dev_id, items in device_groups.items():
             for item in items:
                 if item['pla'] > self.pla_threshold:
@@ -169,12 +175,14 @@ class SensorDataManager:
                     fp_list.append(item['is_fp'])
                     dev_ids_list.append(item['dev_id'])
                     impact_ids_list.append(item['id'])
+                    pla_list.append(item['pla'])
         
         self.timestamps = np.array(saes_list)
         self.identifiers = np.array(ids_list)
         self.is_false_positive = np.array(fp_list, dtype=bool) # Store as numpy array
         self.device_ids = np.array(dev_ids_list)
         self.impact_ids = np.array(impact_ids_list)
+        self.pla_values = np.array(pla_list)
         print(f"Loaded {len(saes_list)} valid SAE events.")
 
 

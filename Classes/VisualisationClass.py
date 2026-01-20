@@ -92,10 +92,12 @@ class Visualizer:
         
         plot_data = {p: {'coded': [], 'aligned': [], 'unaligned': []} for p in all_players}
         unique_matches = {p: set() for p in all_players}
+        coll_qualifiers = getattr(coll_data, 'qualifiers', None)
         
         for i, name in enumerate(coll_data.identifiers):
             if name in plot_data: 
-                plot_data[name]['coded'].append(coll_data.timestamps[i])
+                qual = coll_qualifiers[i] if coll_qualifiers is not None else ""
+                plot_data[name]['coded'].append((coll_data.timestamps[i], i, qual))
 
         shifted_sae = sae_data.timestamps - result.sync_point
         # Access the boolean array
@@ -103,26 +105,65 @@ class Visualizer:
         sae_aligned_count = 0
         sae_devs = sae_data.device_ids
         sae_ids = sae_data.impact_ids
+
+        sae_plas = getattr(sae_data, 'pla_values', None)
+        
         
         for i, sae_t in enumerate(shifted_sae):
             name = sae_data.identifiers[i]
             is_fp = sae_fps[i] if sae_fps is not None else False
             dev_id = sae_devs[i] if sae_devs is not None else ""
             imp_id = sae_ids[i] if sae_ids is not None else ""
+            pla_val = sae_plas[i] if sae_plas is not None else 0
             
             if name not in plot_data: continue
             
             p_coll_mask = (coll_data.identifiers == name)
             p_coll_ts = coll_data.timestamps[p_coll_mask]
-            
-            if len(p_coll_ts) > 0 and np.min(np.abs(p_coll_ts - sae_t)) < self.config.alignment_threshold:
-                # Store tuple (time, is_false_positive)
-                plot_data[name]['aligned'].append((sae_t, is_fp, dev_id, imp_id))
-                sae_aligned_count += 1
-                matched_indices = np.where(p_coll_mask & (np.abs(coll_data.timestamps - sae_t) < self.config.alignment_threshold))[0]
-                unique_matches[name].update(matched_indices)
+
+            cme_time = None
+            cme_qualifier = "NaN"
+            is_aligned = False
+
+            if len(p_coll_ts) > 0:
+                # Calculate distances to find specific match
+                dists = np.abs(p_coll_ts - sae_t)
+                min_dist_idx = np.argmin(dists)
+                
+                if dists[min_dist_idx] < self.config.alignment_threshold:
+                    is_aligned = True
+                    sae_aligned_count += 1
+                    
+                    # [NEW] Capture the specific matched CME time
+                    cme_time = p_coll_ts[min_dist_idx]
+
+                    if coll_qualifiers is not None:
+                        # Get qualifiers for this player, then grab the one at min_dist_idx
+                        p_quals = coll_qualifiers[p_coll_mask]
+                        cme_qualifier = p_quals[min_dist_idx]
+
+                    # 1. Get the global indices corresponding to this player's events
+                    global_indices = np.where(p_coll_mask)[0]
+                    
+                    # 2. Create a local boolean mask for matches (relative to the player's subset)
+                    local_match_mask = (dists < self.config.alignment_threshold)
+                    
+                    # 3. Filter global indices using the local mask
+                    matched_indices = global_indices[local_match_mask]
+                    
+                    unique_matches[name].update(matched_indices)
+                    
+                    # matched_indices = np.where(p_coll_mask & (dists < self.config.alignment_threshold))[0]
+                    # unique_matches[name].update(matched_indices)
+
+            # [UPDATED] Tuple now includes: Index (i), PLA, and CME Time
+            # Structure: (time, is_fp, dev_id, imp_id, index, pla, cme_time)
+            item = (sae_t, is_fp, dev_id, imp_id, i, pla_val, cme_time, cme_qualifier)
+
+            if is_aligned:
+                plot_data[name]['aligned'].append(item)
             else:
-                plot_data[name]['unaligned'].append((sae_t, is_fp, dev_id, imp_id))
+                plot_data[name]['unaligned'].append(item)
 
         return {
             'data': plot_data,
@@ -131,6 +172,22 @@ class Visualizer:
             'total_sae': len(shifted_sae),
             'matches': unique_matches
         }
+        #     if len(p_coll_ts) > 0 and np.min(np.abs(p_coll_ts - sae_t)) < self.config.alignment_threshold:
+        #         # Store tuple (time, is_false_positive)
+        #         plot_data[name]['aligned'].append((sae_t, is_fp, dev_id, imp_id))
+        #         sae_aligned_count += 1
+        #         matched_indices = np.where(p_coll_mask & (np.abs(coll_data.timestamps - sae_t) < self.config.alignment_threshold))[0]
+        #         unique_matches[name].update(matched_indices)
+        #     else:
+        #         plot_data[name]['unaligned'].append((sae_t, is_fp, dev_id, imp_id))
+
+        # return {
+        #     'data': plot_data,
+        #     'players': all_players,
+        #     'aligned_count': sae_aligned_count,
+        #     'total_sae': len(shifted_sae),
+        #     'matches': unique_matches
+        # }
 
     def save_outputs(self, viz_data, match_meta, display_shift=0.0):
             out_name = self.config.output_name
@@ -152,9 +209,14 @@ class Visualizer:
             # Determine Header Info
             team = self.config.team or match_meta.get('team', '')
             opponent = match_meta.get('opponent', '')
-            
+
             headers = ['Player', 'Team', 'Opponent', 'DeviceId', 'LocalImpactId', 
-                    'IsFalsePositive_final', 'IsFalsePositive_orig', 'aligned_with_cme', 'Time']
+                       'PLA', 'Time', 'CMETime', 'Qualifier',
+                       'IsFalsePositive_final', 'IsFalsePositive_orig', 'aligned_with_cme', 
+                       'MatchEfficiency']
+            
+            # headers = ['Player', 'Team', 'Opponent', 'DeviceId', 'LocalImpactId', 
+            #         'IsFalsePositive_final', 'IsFalsePositive_orig', 'aligned_with_cme', 'Time']
 
             with open(csv_name, 'w', newline='') as f:
                 writer = csv.writer(f)
@@ -162,6 +224,10 @@ class Visualizer:
                 
                 for player in viz_data['players']:
                     p_data = viz_data['data'][player]
+
+                    unique_matched = len(viz_data['matches'][player])
+                    total_coded = len(p_data['coded'])
+                    match_efficiency = f"{unique_matched}/{total_coded}"
                     
                     # Build set of aligned IDs for lookup (to determine aligned_with_cme)
                     # Key: (DeviceId, LocalImpactId)
@@ -172,9 +238,11 @@ class Visualizer:
                     # Iterate over ALL events (stored in 'unaligned' list per previous logic)
                     for item in all_events:
                         # Unpack: time, is_fp, dev_id, imp_id
-                        t, is_fp_orig, dev, imp = item
+                        t, is_fp_orig, dev, imp, idx, pla, cme_t, qual = item
                         
-                        is_aligned = (dev, imp) in aligned_set
+                        # is_aligned = (dev, imp) in aligned_set
+                        # (This is safer than matching IDs)
+                        is_aligned = cme_t is not None
 
                         
                         # Logic: If aligned, it's NOT a False Positive (Final=False)
@@ -182,8 +250,37 @@ class Visualizer:
                         is_fp_final = False if is_aligned else is_fp_orig
                         
                         final_time = t + display_shift
-                        writer.writerow([player, team, opponent, dev, imp, is_fp_final, is_fp_orig, is_aligned, final_time])
-            
+                        final_cme_time = (cme_t + display_shift) if cme_t is not None else None
+                        final_qual = qual if is_aligned else "NaN"
+
+                        writer.writerow([
+                            player, team, opponent, dev, imp, 
+                            pla, final_time, final_cme_time, final_qual,
+                            is_fp_final, is_fp_orig, is_aligned, 
+                            match_efficiency
+                        ])
+                    matched_cme_indices = viz_data['matches'][player]
+                    
+                    for cme_item in p_data['coded']:
+                        # Unpack Tuple: (timestamp, index, qualifier)
+                        cme_t, cme_idx, cme_qual = cme_item
+                        
+                        # Check if this specific CME index was found in the matching process
+                        if cme_idx not in matched_cme_indices:
+                            final_cme_time = cme_t + display_shift
+                            
+                            # Write row: Fill SAE columns with "NaN", Fill CME columns with data
+                            writer.writerow([
+                                player, team, opponent, 
+                                "NaN", "NaN", # DeviceId, LocalImpactId
+                                "NaN",        # PLA
+                                "NaN",        # Time (SAE)
+                                final_cme_time, # CMETime
+                                cme_qual,     # Qualifier
+                                "NaN", "NaN", # IsFalsePositive
+                                False,        # aligned_with_cme
+                                match_efficiency
+                            ])         
             print(f"Stats saved to {csv_name}")
 
     def plot(self, coll_data, sae_data, result: SyncResult, markers: dict = None, player_statuses: dict = None, match_meta=None):
@@ -281,7 +378,8 @@ class Visualizer:
 
             
             # Coded points are just timestamps
-            coded_pts = [t + display_shift for t in d['coded']]
+            # coded_pts = [t + display_shift for t in d['coded']]
+            coded_pts = [item[0] + display_shift for item in d['coded']]
             
             # SAE points are now (timestamp, is_fp) tuples. We must unpack them.
             # Helper to split based on config
@@ -394,7 +492,7 @@ class Visualizer:
         for p in p_data.values():
             # Add shift to these for limit calculation
             # 1. Coded data is still just a list of timestamps
-            all_times.extend([t + display_shift for t in p['coded']])
+            all_times.extend([item[0] + display_shift for item in p['coded']])
             
             # 2. Aligned/Unaligned are now tuples: (time, is_fp)
             # We must access item[0] to get the time

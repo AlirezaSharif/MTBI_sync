@@ -36,9 +36,8 @@ class MultiMatchPlotter:
                 df = pd.read_csv(filepath)
                 
                 # Check required columns
-                required_cols = ['Player', 'Time', 'aligned_with_cme', 'IsFalsePositive_final']
-                if not all(col in df.columns for col in required_cols):
-                    print(f"Warning: File {filepath} missing required columns. Skipping.")
+                if 'Player' not in df.columns:
+                    print(f"Warning: File {filepath} missing 'Player' column. Skipping.")
                     continue
                 
                 # Filter for player
@@ -83,16 +82,35 @@ class MultiMatchPlotter:
         # Store all times for x-axis limits
         all_times = []
 
+        efficiency_labels = []
+
         for i, match in enumerate(match_list):
             df = match['data']
             y = i
+
+            OFF_CODED = -0.2      # Shift Blue Up
+            OFF_ALIGNED = 0.0     # Keep Green Center
+            OFF_UNALIGNED = 0.2  # Shift Red Down
             
             # Draw Timeline Line
-            ax.axhline(y=y, color='gray', linestyle='-', linewidth=1, alpha=0.3)
+            ax.axhline(y=y + 0.5, color='gray', linestyle='-', linewidth=0.5, alpha=0.2) # Separator
+            ax.axhline(y=y, color='gray', linestyle='-', linewidth=1, alpha=0.1)
             
             if df.empty:
+                efficiency_labels.append("N/A")
                 continue
-                
+            if 'MatchEfficiency' in df.columns:
+                eff = df['MatchEfficiency'].iloc[0]
+                efficiency_labels.append(str(eff))
+            else:
+                efficiency_labels.append("")
+            
+            if 'CMETime' in df.columns:
+                cme_data = df['CMETime'].dropna().values
+                if len(cme_data) > 0:
+                    ax.scatter(cme_data, [y + OFF_CODED] * len(cme_data), 
+                               marker='v', c='blue', s=80, alpha=0.8, label='Coded Event', zorder=2)
+                    all_times.extend(cme_data)
             # Extract Data
             times = df['Time'].values
             is_aligned = df['aligned_with_cme'].astype(bool).values
@@ -106,20 +124,20 @@ class MultiMatchPlotter:
             # Condition: Aligned AND Not FP
             mask_aligned = is_aligned
             if np.any(mask_aligned):
-                ax.scatter(times[mask_aligned], [y] * np.sum(mask_aligned), 
-                           marker='^', c='lime', s=100, edgecolors='black', label='Aligned (TP)', zorder=3)
-
+                ax.scatter(times[mask_aligned], [y + OFF_ALIGNED] * np.sum(mask_aligned), 
+                               marker='^', c='lime', s=80, alpha=0.9, 
+                               label='Aligned (TP)', zorder=3)
             # 2. Unaligned Events (Potential True Positives missed by video or just unverified) -> Red
             # Condition: Not Aligned AND Not FP
             mask_unaligned = (~is_aligned) & (~is_fp)
             if np.any(mask_unaligned):
-                ax.scatter(times[mask_unaligned], [y] * np.sum(mask_unaligned), 
-                           marker='^', c='red', s=100, edgecolors='black', alpha=0.7, label='Unaligned', zorder=2)
-            
+                ax.scatter(times[mask_unaligned], [y + OFF_UNALIGNED] * np.sum(mask_unaligned), 
+                               marker='^', c='red', s=80, alpha=0.6, 
+                               label='Unaligned', zorder=2)
             # 3. False Positives (if any) -> Orange
             mask_fp = is_fp
             if np.any(mask_fp):
-                ax.scatter(times[mask_fp], [y] * np.sum(mask_fp), 
+                ax.scatter(times[mask_fp], [y + OFF_ALIGNED] * np.sum(mask_fp), 
                            marker='x', c='orange', s=80, linewidth=2, label='False Positive', zorder=2)
 
         # --- Formatting ---
@@ -129,6 +147,12 @@ class MultiMatchPlotter:
         ax.set_yticklabels([m['label'] for m in match_list], fontsize=12)
         ax.invert_yaxis() # Top match is first in list
         
+
+        ax_right = ax.twinx()
+        ax_right.set_ylim(ax.get_ylim())
+        ax_right.set_yticks(y_positions)
+        ax_right.set_yticklabels(efficiency_labels, fontsize=11)
+        ax_right.set_ylabel("Matched / Total Coded", fontsize=11, rotation=270, labelpad=20)     
         # X-Axis Time Formatter
         def time_fmt(x, pos):
             s = int(x)

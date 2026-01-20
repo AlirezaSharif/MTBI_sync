@@ -203,6 +203,11 @@ class Visualizer:
         display_shift = result.sync_point - t_zero
         
         fig = plt.figure(figsize=(20, max(10, len(viz_data['players']) * 0.4))) 
+        team_name = self.config.team if self.config.team else "Unknown"
+        opp_name = match_meta.get('opponent') if match_meta and match_meta.get('opponent') else "Unknown"
+        fig.suptitle(f"GBHS {team_name} XV vs {opp_name}", fontsize=16, fontweight='bold', y=0.95)
+
+
         gs = fig.add_gridspec(2, 1, height_ratios=[1, 6], hspace=0.1)
         ax_top = fig.add_subplot(gs[0])
         ax_bottom = fig.add_subplot(gs[1])

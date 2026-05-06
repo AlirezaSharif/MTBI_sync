@@ -127,13 +127,16 @@ class MultiMatchPlotter:
                 ax.scatter(times[mask_aligned], [y + OFF_ALIGNED] * np.sum(mask_aligned), 
                                marker='^', c='lime', s=80, alpha=0.9, 
                                label='Aligned (TP)', zorder=3)
+                ax.scatter(times[mask_aligned], [y + OFF_UNALIGNED] * np.sum(mask_aligned), 
+                               marker='^', c='red', s=80, alpha=0.9, 
+                               label='SAEs', zorder=3)
             # 2. Unaligned Events (Potential True Positives missed by video or just unverified) -> Red
             # Condition: Not Aligned AND Not FP
             mask_unaligned = (~is_aligned) & (~is_fp)
             if np.any(mask_unaligned):
                 ax.scatter(times[mask_unaligned], [y + OFF_UNALIGNED] * np.sum(mask_unaligned), 
                                marker='^', c='red', s=80, alpha=0.6, 
-                               label='Unaligned', zorder=2)
+                               label='SAEs', zorder=2)
             # 3. False Positives (if any) -> Orange
             mask_fp = is_fp
             if np.any(mask_fp):
